@@ -8,6 +8,7 @@
 # port 0 in the initial json config file.
 
 import argparse
+import contextlib
 import http.client
 import json
 import os.path
@@ -27,59 +28,57 @@ def generate_new_config(original_yaml, admin_address, updated_json):
     with open(original_yaml, 'r') as original_file:
         sys.stdout.write('Admin address is ' + admin_address + '\n')
         try:
-            admin_conn = http.client.HTTPConnection(admin_address)
-            admin_conn.request('GET', '/listeners?format=json')
-            admin_response = admin_conn.getresponse()
-            if not admin_response.status == 200:
-                return False
-            discovered_listeners = json.loads(admin_response.read().decode('utf-8'))
+            with contextlib.closing(http.client.HTTPConnection(admin_address)) as admin_conn:
+                admin_conn.request('GET', '/listeners?format=json')
+                admin_response = admin_conn.getresponse()
+                if not admin_response.status == 200:
+                    return False
+                discovered_listeners = json.loads(admin_response.read().decode('utf-8'))
         except Exception as e:
             sys.stderr.write('Cannot connect to admin: %s\n' % e)
             return False
-        else:
-            raw_yaml = original_file.readlines()
-            index = 0
-            for discovered in discovered_listeners['listener_statuses']:
-                replaced = False
-                addresses = (
-                    discovered['additional_local_addresses'] + [discovered['local_address']] if
-                    discovered.get('additional_local_addresses') else [discovered['local_address']])
-                for local_address in addresses:
-                    if 'pipe' in local_address:
-                        path = local_address['pipe']['path']
-                        for index in range(index + 1, len(raw_yaml) - 1):
-                            if 'pipe:' in raw_yaml[index] and 'path:' in raw_yaml[index + 1]:
-                                raw_yaml[index + 1] = re.sub(
-                                    'path:.*', 'path: "' + path + '"', raw_yaml[index + 1])
-                                replaced = True
-                                break
-                    else:
-                        addr = local_address['socket_address']['address']
-                        port = str(local_address['socket_address']['port_value'])
-                        if addr[0] == '[':
-                            addr = addr[1:-1]  # strip [] from ipv6 address.
-                        for index in range(index + 1, len(raw_yaml) - 2):
-                            if ('socket_address:' in raw_yaml[index]
-                                    and 'address:' in raw_yaml[index + 1]
-                                    and 'port_value:' in raw_yaml[index + 2]):
-                                raw_yaml[index + 1] = re.sub(
-                                    'address:.*', 'address: "' + addr + '"', raw_yaml[index + 1])
-                                raw_yaml[index + 2] = re.sub(
-                                    'port_value:.*', 'port_value: ' + port, raw_yaml[index + 2])
-                                replaced = True
-                                break
-                    if replaced:
-                        sys.stderr.write(
-                            'replaced listener at line ' + str(index) + ' with ' + str(discovered)
-                            + '\n')
-                    else:
-                        sys.stderr.write(
-                            'Failed to replace a discovered listener ' + str(discovered) + '\n')
-                        return False
-            with open(updated_json, 'w') as outfile:
-                outfile.writelines(raw_yaml)
-        finally:
-            admin_conn.close()
+
+        raw_yaml = original_file.readlines()
+        index = 0
+        for discovered in discovered_listeners['listener_statuses']:
+            replaced = False
+            addresses = (
+                discovered['additional_local_addresses'] + [discovered['local_address']] if
+                discovered.get('additional_local_addresses') else [discovered['local_address']])
+            for local_address in addresses:
+                if 'pipe' in local_address:
+                    path = local_address['pipe']['path']
+                    for index in range(index + 1, len(raw_yaml) - 1):
+                        if 'pipe:' in raw_yaml[index] and 'path:' in raw_yaml[index + 1]:
+                            raw_yaml[index + 1] = re.sub(
+                                'path:.*', 'path: "' + path + '"', raw_yaml[index + 1])
+                            replaced = True
+                            break
+                else:
+                    addr = local_address['socket_address']['address']
+                    port = str(local_address['socket_address']['port_value'])
+                    if addr[0] == '[':
+                        addr = addr[1:-1]  # strip [] from ipv6 address.
+                    for index in range(index + 1, len(raw_yaml) - 2):
+                        if ('socket_address:' in raw_yaml[index]
+                                and 'address:' in raw_yaml[index + 1]
+                                and 'port_value:' in raw_yaml[index + 2]):
+                            raw_yaml[index + 1] = re.sub(
+                                'address:.*', 'address: "' + addr + '"', raw_yaml[index + 1])
+                            raw_yaml[index + 2] = re.sub(
+                                'port_value:.*', 'port_value: ' + port, raw_yaml[index + 2])
+                            replaced = True
+                            break
+                if replaced:
+                    sys.stderr.write(
+                        'replaced listener at line ' + str(index) + ' with ' + str(discovered)
+                        + '\n')
+                else:
+                    sys.stderr.write(
+                        'Failed to replace a discovered listener ' + str(discovered) + '\n')
+                    return False
+        with open(updated_json, 'w') as outfile:
+            outfile.writelines(raw_yaml)
 
     return True
 
